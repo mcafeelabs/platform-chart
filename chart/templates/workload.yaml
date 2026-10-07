@@ -1,0 +1,84 @@
+{{- $rollout := include "svc.useRollout" . -}}
+{{- $sandbox := include "svc.sandbox" . -}}
+{{- if $rollout }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+{{- end }}
+metadata:
+  name: {{ include "svc.name" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ if $sandbox }}1{{ else }}{{ .Values.deployment.replicas }}{{ end }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "svc.selectorLabels" . | nindent 6 }}
+  {{- if $rollout }}
+  strategy:
+    canary:
+      steps:
+        {{- toYaml .Values.deployment.rollout.steps | nindent 8 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "svc.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ toJson .Values.configFile | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "svc.name" . }}
+      {{- if and $sandbox .Values.platform.sandbox.nodePool.enabled }}
+      nodeSelector:
+        {{- toYaml .Values.platform.sandbox.nodePool.selector | nindent 8 }}
+      tolerations:
+        - {{- toYaml .Values.platform.sandbox.nodePool.taint | nindent 10 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - {name: SERVICE_NAME, value: {{ include "svc.name" . | quote }}}
+            - {name: ENVIRONMENT, value: {{ .Values.service.environment | quote }}}
+            - {name: SANDBOX_NAME, value: {{ .Values.service.sandbox.name | quote }}}
+            - {name: SERVICE_VERSION, value: {{ .Values.image.tag | quote }}}
+            - {name: CONFIG_FILE, value: /etc/service/config.yaml}
+            - {name: OTEL_PROPAGATORS, value: "tracecontext,baggage"}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- with .Values.deployment.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if eq .Values.service.profile "http-api" }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.deployment.port }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          {{- end }}
+          resources:
+            {{- toYaml .Values.deployment.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/service
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "svc.configSecret" . }}

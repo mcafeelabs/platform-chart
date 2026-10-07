@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["service", "image", "configFile"],
+  "properties": {
+    "service": {
+      "type": "object",
+      "required": ["name", "profile", "environment"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z]([-a-z0-9]*[a-z0-9])?$"},
+        "profile": {"enum": ["http-api", "worker"]},
+        "environment": {"type": "string", "minLength": 1},
+        "sandbox": {
+          "type": "object",
+          "properties": {"name": {"type": "string"}, "baselineNamespace": {"type": "string"}}
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1}
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "provision", "resourceName"],
+        "properties": {
+          "kind": {"enum": ["http-endpoint", "nats-subject", "sqs-queue", "postgres"]}
+        }
+      }
+    },
+    "configFile": {
+      "type": "object",
+      "required": ["template", "refs"],
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "store", "key"],
+            "properties": {
+              "store": {"type": "object", "required": ["name", "kind"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}

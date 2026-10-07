@@ -1,0 +1,9 @@
+apiVersion: v2
+name: platform-service
+description: >-
+  The central chart every service deploys with. Values come from svcreg's
+  rendered/<env>/<svc>/values.yaml in the services repo; chartProfile picks the
+  deployment pattern and provides[] the resources to provision.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

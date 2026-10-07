@@ -1,0 +1,2 @@
+{{ include "svc.name" . }} ({{ .Values.service.profile }}) in {{ .Release.Namespace }}{{ with .Values.service.sandbox.name }}, sandbox {{ . }}{{ end }}
+image {{ .Values.image.repository }}:{{ .Values.image.tag }}

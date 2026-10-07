@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: false
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+      - run: helm lint chart -f tests/fixtures/dev-orders.yaml
+      - run: tests/run.sh
+      - name: capabilities.yaml loads in svcreg
+        run: go run github.com/mcafeelabs/platform/cmd/svcreg@main lint-service --dir tests/service --capabilities chart/capabilities.yaml

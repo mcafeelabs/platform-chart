@@ -1,0 +1,47 @@
+{{- /*
+config.yaml for the service. With references, one ExternalSecret resolves
+them all (each from its own store) and renders the file from the template
+svcreg produced; secret values never pass through git or the renderer.
+*/ -}}
+{{- if .Values.configFile.refs }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ include "svc.configSecret" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+spec:
+  refreshInterval: 1m
+  target:
+    name: {{ include "svc.configSecret" . }}
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        config.yaml: |
+          {{- .Values.configFile.template | nindent 10 }}
+  data:
+    {{- range .Values.configFile.refs }}
+    - secretKey: {{ .id }}
+      sourceRef:
+        storeRef:
+          name: {{ .store.name }}
+          kind: {{ .store.kind }}
+      remoteRef:
+        key: {{ .key | quote }}
+        {{- with .property }}
+        property: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- else }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "svc.configSecret" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  config.yaml: |
+    {{- .Values.configFile.template | nindent 4 }}
+{{- end }}

@@ -1,0 +1,13 @@
+# Uses every profile-independent kind, so CI notices if capabilities.yaml and
+# svcreg disagree.
+apiVersion: platform/v1
+name: probe
+owner: platform
+chartProfile: http-api
+provides:
+  - {name: api, kind: http-endpoint}
+  - {name: db, kind: postgres}
+  - {name: jobs, kind: sqs-queue}
+  - {name: probe.events, kind: nats-subject}
+config:
+  schema: ./schema.yaml

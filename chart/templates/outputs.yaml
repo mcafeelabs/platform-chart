@@ -1,0 +1,200 @@
+{{- /*
+Provision what the service provides. In a sandbox svcreg sets provision=false
+for shared outputs, which stay with the baseline.
+*/ -}}
+{{- $root := . -}}
+{{- range .Values.outputs }}
+{{- if .provision }}
+{{- $o := . }}
+{{- if eq .kind "postgres" }}
+{{- if eq $root.Values.platform.provisioner "crossplane" }}
+---
+apiVersion: platform.mcafeelabs.io/v1alpha1
+kind: PostgresInstance
+metadata:
+  name: {{ .resourceName }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+spec:
+  databaseName: {{ include "svc.name" $root | replace "-" "_" }}
+  writeConnectionSecretToRef:
+    name: {{ .connectionSecret }}
+{{- else }}
+{{- $host := printf "%s.%s.svc.cluster.local" .resourceName $root.Release.Namespace }}
+{{- $db := include "svc.name" $root | replace "-" "_" }}
+---
+# Local stand-in for the Crossplane composite: a single postgres pod whose
+# connection secret is assembled by ESO from a generated password.
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: {{ .resourceName }}-password
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+spec:
+  length: 24
+  digits: 6
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .connectionSecret }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+spec:
+  # Generate once; never rotate under a running database.
+  refreshInterval: "0"
+  target:
+    name: {{ .connectionSecret }}
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        host: {{ $host | quote }}
+        port: "5432"
+        database: {{ $db | quote }}
+        username: {{ $db | quote }}
+        password: "{{ "{{" }} .password {{ "}}" }}"
+        uri: "postgres://{{ $db }}:{{ "{{" }} .password {{ "}}" }}@{{ $host }}:5432/{{ $db }}?sslmode=disable"
+  dataFrom:
+    - sourceRef:
+        generatorRef:
+          apiVersion: generators.external-secrets.io/v1alpha1
+          kind: Password
+          name: {{ .resourceName }}-password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .resourceName }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+    platform.mcafeelabs.io/output: {{ .name | quote }}
+spec:
+  selector:
+    platform.mcafeelabs.io/postgres: {{ .resourceName }}
+  ports:
+    - name: tcp-postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .resourceName }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+    platform.mcafeelabs.io/output: {{ .name | quote }}
+spec:
+  serviceName: {{ .resourceName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      platform.mcafeelabs.io/postgres: {{ .resourceName }}
+  template:
+    metadata:
+      labels:
+        platform.mcafeelabs.io/postgres: {{ .resourceName }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        fsGroup: 70
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: {{ $root.Values.postgres.image }}
+          env:
+            - name: POSTGRES_DB
+              valueFrom: {secretKeyRef: {name: {{ .connectionSecret }}, key: database}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: {{ .connectionSecret }}, key: username}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .connectionSecret }}, key: password}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          readinessProbe:
+            exec: {command: [pg_isready, -U, {{ $db | quote }}]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+      volumes:
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ $root.Values.postgres.storage }}
+{{- end }}
+{{- end }}
+{{- if eq .kind "sqs-queue" }}
+---
+{{- if eq $root.Values.platform.provisioner "crossplane" }}
+apiVersion: platform.mcafeelabs.io/v1alpha1
+kind: Queue
+metadata:
+  name: {{ .resourceName }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+spec:
+  queueName: {{ .value }}
+{{- else }}
+# No SQS in a local cluster: record the queue the service would get.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .resourceName }}
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+    platform.mcafeelabs.io/output: {{ .name | quote }}
+data:
+  kind: sqs-queue
+  queueName: {{ .value | quote }}
+  provisioner: local-stub
+{{- end }}
+{{- end }}
+{{- with .publish }}
+---
+# Publish the dynamic output so consumers resolve $output through the store.
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: {{ $o.resourceName }}-publish
+  labels:
+    {{- include "svc.labels" $root | nindent 4 }}
+spec:
+  refreshInterval: 1m
+  updatePolicy: Replace
+  deletionPolicy: Delete
+  secretStoreRefs:
+    - name: {{ .store.name }}
+      kind: {{ .store.kind }}
+  selector:
+    secret:
+      name: {{ $o.connectionSecret }}
+  data:
+    {{- range .keys }}
+    - match:
+        secretKey: {{ .secretKey }}
+        remoteRef:
+          remoteKey: {{ .remoteKey | quote }}
+          property: {{ .property | quote }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

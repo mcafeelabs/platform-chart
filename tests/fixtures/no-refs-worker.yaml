@@ -1,0 +1,11 @@
+# A worker with only literal config: plain Secret, no Service.
+service: {name: reports, owner: team-data, profile: worker, environment: dev, namespace: dev, wave: 3, sandbox: {name: "", baselineNamespace: ""}}
+image: {repository: ghcr.io/mcafeelabs/reports, tag: 1.0.0}
+platform: {provisioner: local, rollouts: {enabled: false}}
+deployment: {replicas: 1, port: 8080}
+outputs: []
+configFile:
+  template: |
+    log:
+      level: info
+  refs: []
